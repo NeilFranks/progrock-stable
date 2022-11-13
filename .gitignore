@@ -1,6 +1,17 @@
+
 *.txt
 /latent*
 /ldm*
 /models*
 /out*
 /src*
+
+src/
+init_images/
+_esrgan_/
+*.png
+__pycache__/
+*.egg-info/
+out/
+*.ckpt
+

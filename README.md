@@ -1,18 +1,28 @@
 # Prog Rock Stable
 An enhanced (hopefully!) version of Stable Diffusion
 
-Please consider supporting my time and effort in maintaining and improving this program on my [Patreon](https://www.patreon.com/jasonmhough?fan_landing=true). Thanks!
-
 Also available:
 - [Prog Rock Diffusion](https://github.com/lowfuel/progrockdiffusion) (command line Disco Diffusion, with Go_Big and other enhancements)
 - [Disco Diffusion notebook](https://github.com/lowfuel/DiscoDiffusion-Warp-gobig) with Go_Big
 
+# Quick updating note:
+If you installed before 8/24/2022 and have just grabbed the latest code, you'll need to manually install a few extra items.
+Make sure you're in your prs conda environment, then do:
+```
+pip install jsonmerge clean-fid resize-right torchdiffeq
+```
+
 # Installation instructions
-Download this repository either by zip file or via git:
+
+## Download Prog Rock Stable
+Download this repository either by zip file (click the "Code" option above and select "Download ZIP"), or via git:
 ```
 git clone https://github.com/lowfuel/progrock-stable prs
 cd prs
 ```
+
+## Setup a Conda environment
+*(MacOS M1/M2 users, see [here](#macos-setup) for Conda instructions, then move on to the next section)*
 
 Create a [conda](https://conda.io/) environment named `prs`:
 ```
@@ -20,12 +30,17 @@ conda env create -f environment.yaml
 conda activate prs
 ```
 
-Download the [Stable Diffusion weights](https://huggingface.co/CompVis/stable-diffusion-v-1-4-original) "sd-v1-4.ckpt", and place it in the `models` directory
+## Download Stable Diffusion Weights
+Download the latest [Stable Diffusion weights](https://huggingface.co/runwayml/stable-diffusion-v1-5) - download whichever checkpoint is appropriate for your needs, rename it to "sd.ckpt", and place it in the `models` subdirectory
 
 Run prs to make sure everything worked!
 ```
 python prs.py
 ```
+## Optional - A GUI is available!
+![image](https://user-images.githubusercontent.com/64171756/186978420-d18ad0f6-5a98-4e8c-ba2b-468b430231a1.png)
+
+See instructions on the [Visual Diffusion](https://github.com/KnoBuddy/visualdiffusion/) repo page.
 
 # Basic Use
 
@@ -52,6 +67,29 @@ Create a text file (let's call it myprompts.txt), then edit your settings file a
 ```
 Each prompt will be run, in order, n_batches of times. So if n_batches = 5 you'll get 5 images for the first prompt, then five for the second, and so on.
 
+## Randomize things a bit
+There are two ways to randomize your prompts.
+
+### Random selections from files
+Placing a word in your prompt between _ characters will replace that word with a random selection from a txt file of the same name (inside the settings folder).
+
+For example, ```"A painting by _artist_"``` would replace artist with a randomly selected entry in the file artist.txt
+
+A few starting files are provided.
+
+### Dynamic prompts
+A dynamic selection set from which the code will randomly choose one or more values.
+For example:
+```
+    "A <castle|inn|mansion|shop> in New York"
+```
+would pick one of those values and leave out the rest, the prompt becoming (for example) "A mansion in New York".
+If you want more than one of the choices, you can start it with this little trigger:
+```
+    "A <^^2|strange|wonderful|mysterious|weird|lovely> car."
+```
+This would select two items, perhaps becoming "A wonderful weird car."
+
 # GoBIG! What it is and how to use it
 GoBIG is an upscaling technique, where a starting image is cut up into sections, and then each of those sections is re-rendered at a higher resolution. Once each section is done, they're all gathered and composited together, resulting in a new image that is 2x the size of the original.
 
@@ -64,14 +102,41 @@ python prs.py --gobig --gobig_init "init_images/myfile.png"
 ```
 ## Fine-tuning GoBIG
 There are a few settings you can tweak to improve your results:
-- First and foremost is init_strength. This setting determines how much of the original image should be retained, and thus how many steps to skip in the render process. I recommend a number between 0.55 and 0.75.
+- First and foremost is init_strength. This setting determines how much of the original image should be retained, and thus how many steps to skip in the render process. I recommend a number between 0.55 and 0.75, and you will need to experiment to find the perfect setting for your image.
 
-- The second is to use [RealESRGAN](https://github.com/xinntao/Real-ESRGAN/) to handle the initial resizing the starting image. To do this, install RealESRGAN and make sure it is in your path, then set "gobig_realesrgan" to "true" in your settings. This will begin your process with a much cleaner image.
+- The second is to use [RealESRGAN](https://github.com/xinntao/Real-ESRGAN/releases) to handle the initial resizing the starting image. To do this, install RealESRGAN and make sure it is in your path, then set "resize_method" to "realesrgan" in your settings. This will begin your process with a much cleaner image.
 
 - Lastly, consider tweaking the prompt from your original image to one that focuses more on texture and detail. Keep in mind that each section of the image will use the prompt, so if the image you are upscaling has a singular subject in one area (say, a bird), as it re-renders each section if "bird" is in the prompt it may try to add a bird to those smaller sections, resulting in an upscaled image that is not what you wanted.
 
 - Not every image does well with GoBIG. It is best used on images that have lots of content and fine detail everywhere. So, don't force it! Sometimes a simple upscaler like RealESRGAN will do a better job, especially on those images where your prompt might not apply to every section.
 
+- Finally, remember that the output itself doesn't need to be "final". Take the results from GoBIG and load it into an image editor, along with the original and the ESRGAN upscaled version, layer them, and keep the best areas from each for a true final image.
+
+# MacOS Setup
+
+Install Homebrew:
+```
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+Restart your terminal, then:
+```
+brew install miniforge
+conda init zsh
+```
+Restart your terminal again, and setup your Conda environment:
+```
+conda env create -f mac-environment.yaml
+conda activate prs
+```
+You can now continue with [installation above](#download-stable-diffusion-weights).
+
+## MacOS troubleshooting
+You may get an error from pytorch about functional.py. To fix this, unfortunately for now you need to hand-edit the file it errors on. The path to this file should be visible in the error.
+
+In the file, in layer_norm(), change "input" to "input.contiguous()" here:
+```
+    return torch.layer_norm(input.contiguous(), ...
+```
 
 # About Stable Diffusion
 *Stable Diffusion was made possible thanks to a collaboration with [Stability AI](https://stability.ai/) and [Runway](https://runwayml.com/) and builds upon our previous work:*
