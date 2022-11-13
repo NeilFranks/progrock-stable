@@ -38,7 +38,7 @@
     "eta" : 0.0, // currently does not seem to do anything
     "from_file": null, // load prompts from this file instead of using a single prompt. Each prompt is rendered n_batches times
     "cool_down": 0.0, // number of seconds to pause between images, to keep GPU cool
-    "checkpoint": "./models/sd.ckpt",
+    "checkpoint": "./models/sd-v1-4.ckpt",
     "use_jpg": false, // set this to save your output in JPG format to save space
     "hide_metadata": false, // set to true if you don"t want your prompt and seed in the PNG output metadata
     "save_settings": false, // set to true if you want a settings file like this saved with every image

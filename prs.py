@@ -2,6 +2,7 @@ import argparse
 import os
 import sys
 import glob
+import imageio
 import random
 import shutil
 import torch
@@ -20,7 +21,7 @@ from typing import Iterable
 import time
 from pytorch_lightning import seed_everything
 from torch import autocast
-#import accelerate
+# import accelerate
 from contextlib import contextmanager, nullcontext
 import subprocess
 
@@ -42,14 +43,17 @@ except:
     pass
 
 # samplers from the Karras et al paper
-KARRAS_SAMPLERS = { 'k_heun', 'k_euler', 'k_dpm_2' }
-NON_KARRAS_K_DIFF_SAMPLERS = { 'k_lms', 'k_dpm_2_ancestral', 'k_euler_ancestral' }
-K_DIFF_SAMPLERS = { *KARRAS_SAMPLERS, *NON_KARRAS_K_DIFF_SAMPLERS }
-NOT_K_DIFF_SAMPLERS = { 'ddim', 'plms' }
-VALID_SAMPLERS = { *K_DIFF_SAMPLERS, *NOT_K_DIFF_SAMPLERS }
+KARRAS_SAMPLERS = {'k_heun', 'k_euler', 'k_dpm_2'}
+NON_KARRAS_K_DIFF_SAMPLERS = {
+    'k_lms', 'k_dpm_2_ancestral', 'k_euler_ancestral'}
+K_DIFF_SAMPLERS = {*KARRAS_SAMPLERS, *NON_KARRAS_K_DIFF_SAMPLERS}
+NOT_K_DIFF_SAMPLERS = {'ddim', 'plms'}
+VALID_SAMPLERS = {*K_DIFF_SAMPLERS, *NOT_K_DIFF_SAMPLERS}
+
 
 class KCFGDenoiser(nn.Module):
     inner_model: CompVisDenoiser
+
     def __init__(self, model: CompVisDenoiser):
         super().__init__()
         self.inner_model = model
@@ -59,9 +63,12 @@ class KCFGDenoiser(nn.Module):
         sigma_in = torch.cat([sigma] * 2)
         cond_in = torch.cat([uncond, *conditions])
         conditions_len = len(conditions)
-        uncond, *conditions = self.inner_model(x_in, sigma_in, cond=cond_in).chunk(1 + conditions_len)
+        uncond, * \
+            conditions = self.inner_model(
+                x_in, sigma_in, cond=cond_in).chunk(1 + conditions_len)
         cond = torch.sum(torch.stack(conditions), dim=0) / conditions_len
         return uncond + (cond - uncond) * cond_scale
+
 
 def chunk(it, size):
     it = iter(it)
@@ -96,6 +103,7 @@ def get_resampling_mode():
     except Exception as ex:
         return 1  # 'Lanczos' irrespective of version.
 
+
 def load_img(w, h, path, opt):
     image = Image.open(path).convert("RGB")
     xw, xh = image.size
@@ -104,7 +112,8 @@ def load_img(w, h, path, opt):
             image = esrgan_resize(image, opt.device_id, opt.esrgan_model)
         image = image.resize((w, h), get_resampling_mode())
         image.convert("RGB")
-        print(f'Warning: Init image size ({xw}x{xh}) differs from target size ({w}x{h}).')
+        print(
+            f'Warning: Init image size ({xw}x{xh}) differs from target size ({w}x{h}).')
         print(f'         It will be resized (if using improved composition mode, this is expected)')
     image = np.array(image).astype(np.float32) / 255.0
     image = image[None].transpose(0, 3, 1, 2)
@@ -129,16 +138,25 @@ def thats_numberwang(dir, wildcard):
                 print(f'Please make sure output filenames use the name-1234.png format')
                 quit()
             filenums.append(filenum)
+        else:
+            try:
+                filenums.append(int(file))
+            except:
+                try:
+                    filenums.append(int(file[:-4]))
+                except:
+                    pass
     if not filenums:
         numberwang = 0
     else:
         numberwang = max(filenums) + 1
     return numberwang
 
-def slerp(device, t, v0:torch.Tensor, v1:torch.Tensor, DOT_THRESHOLD=0.9995):
+
+def slerp(device, t, v0: torch.Tensor, v1: torch.Tensor, DOT_THRESHOLD=0.9995):
     v0 = v0.detach().cpu().numpy()
     v1 = v1.detach().cpu().numpy()
-    
+
     dot = np.sum(v0 * v1 / (np.linalg.norm(v0) * np.linalg.norm(v1)))
     if np.abs(dot) > DOT_THRESHOLD:
         v2 = (1 - t) * v0 + t * v1
@@ -155,25 +173,33 @@ def slerp(device, t, v0:torch.Tensor, v1:torch.Tensor, DOT_THRESHOLD=0.9995):
 
     return v2
 
+
 def split_weighted_subprompts(input_string, normalize=True):
-    parsed_prompts = [(match.group("prompt").replace("\\:", ":"), float(match.group("weight") or 1)) for match in re.finditer(prompt_parser, input_string)]
+    parsed_prompts = [(match.group("prompt").replace("\\:", ":"), float(match.group(
+        "weight") or 1)) for match in re.finditer(prompt_parser, input_string)]
     if not normalize:
         return parsed_prompts
     weight_sum = sum(map(lambda x: x[1], parsed_prompts))
-    positive_weight_sum = sum(map(lambda px: px[1] if (px[1] > 0) else 0, parsed_prompts))
-    negative_weight_sum = -sum(map(lambda nx: nx[1] if (nx[1] < 0) else 0, parsed_prompts))
-    num_negative_weights = sum(map(lambda nx: 1 if (nx[1] < 0) else 0, parsed_prompts))
+    positive_weight_sum = sum(
+        map(lambda px: px[1] if (px[1] > 0) else 0, parsed_prompts))
+    negative_weight_sum = - \
+        sum(map(lambda nx: nx[1] if (nx[1] < 0) else 0, parsed_prompts))
+    num_negative_weights = sum(
+        map(lambda nx: 1 if (nx[1] < 0) else 0, parsed_prompts))
     if positive_weight_sum == 0:
         print("Warning: Positive subprompt weights add up to zero. Discarding and using even weights instead.")
         positive_weight_sum = 1
     if negative_weight_sum == 0:
         if num_negative_weights > 0:
-            print("Warning: Negative subprompt weights add up to zero. Discarding and using even weights instead.")
+            print(
+                "Warning: Negative subprompt weights add up to zero. Discarding and using even weights instead.")
         negative_weight_sum = 1
     if negative_weight_sum < 0:
-        print("Warning: Negative subprompt weights add up to less than one. Not normalizing.")
+        print(
+            "Warning: Negative subprompt weights add up to less than one. Not normalizing.")
         negative_weight_sum = 1
     return [(x[0], (x[1] / positive_weight_sum) if (x[1] > 0) else (x[1] / negative_weight_sum)) for x in parsed_prompts]
+
 
 prompt_parser = re.compile("""
     (?P<prompt>     # capture group for 'prompt'
@@ -190,6 +216,7 @@ prompt_parser = re.compile("""
     )               # end non-capture group
 """, re.VERBOSE)
 
+
 class CFGDenoiser(nn.Module):
     def __init__(self, model):
         super().__init__()
@@ -201,6 +228,7 @@ class CFGDenoiser(nn.Module):
         cond_in = torch.cat([uncond, cond])
         uncond, cond = self.inner_model(x_in, sigma_in, cond=cond_in).chunk(2)
         return uncond + (cond - uncond) * cond_scale
+
 
 def do_run(device, model, opt):
     print(f'Starting render!')
@@ -221,8 +249,8 @@ def do_run(device, model, opt):
     progress_image = "progress.jpg" if opt.filetype == ".jpg" else "progress.png"
 
     if opt.improve_composition == True:
-        opt.n_iter = 1 # TODO: allow multiple iterations when doing improved composition
-    
+        opt.n_iter = 1  # TODO: allow multiple iterations when doing improved composition
+
     if opt.method in K_DIFF_SAMPLERS:
         model_k_wrapped = CompVisDenoiser(model, quantize=True)
         model_k_guidance = KCFGDenoiser(model_k_wrapped)
@@ -239,22 +267,24 @@ def do_run(device, model, opt):
         else:
             image = load_img(width, height, path, opt).to(device)
         image = repeat(image, '1 ... -> b ...', b=batch_size)
-        latent: Tensor = model.get_first_stage_encoding(model.encode_first_stage(image))  # move to latent space
+        latent: Tensor = model.get_first_stage_encoding(
+            model.encode_first_stage(image))  # move to latent space
         return latent
-    
+
     render_left_to_do = True
     compositional_init = None
     target_w = opt.W
     target_h = opt.H
-    
-    opt.ddim_steps = int(dynamic_value(opt.ddim_steps)) if type(opt.ddim_steps) == str else opt.ddim_steps
+
+    opt.ddim_steps = int(dynamic_value(opt.ddim_steps)) if type(
+        opt.ddim_steps) == str else opt.ddim_steps
 
     while render_left_to_do:
         if compositional_init != None:
             opt.init_image = compositional_init
             opt.W = target_w
             opt.H = target_h
-            #opt.strength = 0.65 # might make this a separate variable later
+            # opt.strength = 0.65 # might make this a separate variable later
         elif opt.improve_composition == True:
             opt.W = 512
             opt.H = 512
@@ -267,13 +297,14 @@ def do_run(device, model, opt):
 
         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
 
-        precision_scope = autocast if opt.precision=="autocast" else nullcontext
+        precision_scope = autocast if opt.precision == "autocast" else nullcontext
         # apple silicon support
         if device.type == 'mps':
             precision_scope = nullcontext
 
         rand_size = [batch_size, *shape]
-        og_start_code = torch.randn(rand_size, device='cpu').to(device) if device.type == 'mps' else torch.randn(rand_size, device=device)
+        og_start_code = torch.randn(rand_size, device='cpu').to(
+            device) if device.type == 'mps' else torch.randn(rand_size, device=device)
         start_code = og_start_code
 
         with torch.no_grad():
@@ -282,12 +313,15 @@ def do_run(device, model, opt):
                     for n in trange(opt.n_iter, desc="Sampling"):
                         for prompts in tqdm(data, desc="data"):
                             uc = None
-                            #process dynamic values
-                            scale = float(dynamic_value(opt.scale)) if type(opt.scale) == str else opt.scale
-                            ddim_eta = float(dynamic_value(opt.ddim_eta)) if type(opt.ddim_eta) == str else opt.ddim_eta
+                            # process dynamic values
+                            scale = float(dynamic_value(opt.scale)) if type(
+                                opt.scale) == str else opt.scale
+                            ddim_eta = float(dynamic_value(opt.ddim_eta)) if type(
+                                opt.ddim_eta) == str else opt.ddim_eta
 
                             if scale != 1.0:
-                                uc = model.get_learned_conditioning(batch_size * [""])
+                                uc = model.get_learned_conditioning(
+                                    batch_size * [""])
 
                             # process the prompt for randomizers and dynamic values
                             # (don't do this after creating a compositional init, so we can keep the same prompt)
@@ -302,7 +336,8 @@ def do_run(device, model, opt):
                             print(f'\nPrompt for this image:\n   {prompts}\n')
                             # split the prompt if it has : for weighting
                             normalize_prompt_weights = True
-                            weighted_subprompts = split_weighted_subprompts(prompts[0], normalize_prompt_weights)
+                            weighted_subprompts = split_weighted_subprompts(
+                                prompts[0], normalize_prompt_weights)
 
                             # save a settings file for this image
                             if opt.save_settings == True and opt.improve_composition == False:
@@ -313,47 +348,92 @@ def do_run(device, model, opt):
 
                             # sub-prompt weighting used if more than 1
                             if len(weighted_subprompts) > 1:
-                                c = torch.zeros_like(uc) # i dont know if this is correct.. but it works
+                                # i dont know if this is correct.. but it works
+                                c = torch.zeros_like(uc)
                                 for i in range(0, len(weighted_subprompts)):
                                     if weighted_subprompts[i][1] < 0:
                                         uc = torch.zeros_like(uc)
                                         break
                                 for i in range(0, len(weighted_subprompts)):
-                                    tensor = model.get_learned_conditioning(weighted_subprompts[i][0])
+                                    tensor = model.get_learned_conditioning(
+                                        weighted_subprompts[i][0])
                                     if weighted_subprompts[i][1] > 0:
-                                        c = torch.add(c, tensor, alpha=weighted_subprompts[i][1])
+                                        c = torch.add(
+                                            c, tensor, alpha=weighted_subprompts[i][1])
                                     else:
-                                        uc = torch.add(uc, tensor, alpha=-weighted_subprompts[i][1])
-                            else: # just behave like usual
+                                        uc = torch.add(
+                                            uc, tensor, alpha=-weighted_subprompts[i][1])
+                            else:  # just behave like usual
                                 c = model.get_learned_conditioning(prompts)
-                            
+
                             if opt.variance != 0.0:
                                 # add a little extra random noise to get varying output with same seed
-                                base_x = og_start_code # torch.randn(rand_size, device=device) * sigmas[0]
+                                # torch.randn(rand_size, device=device) * sigmas[0]
+                                base_x = og_start_code
                                 torch.manual_seed(opt.variance_seed + n)
-                                target_x = torch.randn(rand_size, device='cpu').to(device) if device.type == 'mps' else torch.randn(rand_size, device=device)
-                                start_code = slerp(device, max(0.0, min(1.0, opt.variance)), base_x, target_x)
+                                target_x = torch.randn(rand_size, device='cpu').to(
+                                    device) if device.type == 'mps' else torch.randn(rand_size, device=device)
+                                start_code = slerp(device, max(
+                                    0.0, min(1.0, opt.variance)), base_x, target_x)
 
                             karras_noise = False
+
+                            metadata = PngInfo()
+                            if opt.hide_metadata == False:
+                                metadata.add_text("prompt", str(prompts))
+                                metadata.add_text("seed", str(opt.seed))
+                                metadata.add_text("steps", str(opt.ddim_steps))
+                                metadata.add_text("scale", str(scale))
+                                metadata.add_text("ETA", str(ddim_eta))
+                                metadata.add_text("method", str(opt.method))
+                                metadata.add_text(
+                                    "init_image", str(opt.init_image))
+                                metadata.add_text(
+                                    "variance", str(opt.variance))
+
+                            highest_number = thats_numberwang("out/gif/", "-")
+                            gif_dir = f"out/gif/{highest_number:04}"
+                            os.mkdir(gif_dir)
+
+                            def save_gif_image(samples_ddim, i):
+                                x_samples_ddim = model.decode_first_stage(
+                                    samples_ddim)
+                                x_samples_ddim = torch.clamp(
+                                    (x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+                                for x_sample in x_samples_ddim:
+                                    x_sample = 255. * \
+                                        rearrange(x_sample.cpu().numpy(),
+                                                  'c h w -> h w c')
+                                    output_image = Image.fromarray(
+                                        x_sample.astype(np.uint8))
+
+                                    output_image.save(
+                                        f"{gif_dir}/{i:04}.png", pnginfo=metadata, quality=opt.quality)
 
                             if opt.method in NOT_K_DIFF_SAMPLERS:
                                 if init_latent is None:
                                     samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                                    conditioning=c,
-                                                                    batch_size=batch_size,
-                                                                    shape=shape,
-                                                                    verbose=False,
-                                                                    unconditional_guidance_scale=scale,
-                                                                    unconditional_conditioning=uc,
-                                                                    eta=ddim_eta,
-                                                                    x_T=start_code)
+                                                                     conditioning=c,
+                                                                     batch_size=batch_size,
+                                                                     shape=shape,
+                                                                     verbose=False,
+                                                                     unconditional_guidance_scale=scale,
+                                                                     unconditional_conditioning=uc,
+                                                                     eta=ddim_eta,
+                                                                     x_T=start_code,
+
+                                                                     img_callback=lambda samples_ddim, i: save_gif_image(
+                                                                         samples_ddim, i)
+
+                                                                     )
                                     sigmas = None
                                 else:
                                     # encode (scaled latent)
-                                    z_enc = sampler.stochastic_encode(init_latent, torch.tensor([t_enc]*batch_size).to(device))
+                                    z_enc = sampler.stochastic_encode(
+                                        init_latent, torch.tensor([t_enc]*batch_size).to(device))
                                     # decode it
                                     samples_ddim = sampler.decode(z_enc, c, t_enc, unconditional_guidance_scale=scale,
-                                                            unconditional_conditioning=uc,)
+                                                                  unconditional_conditioning=uc,)
 
                             else:
                                 if opt.method == 'k_dpm_2':
@@ -375,22 +455,27 @@ def do_run(device, model, opt):
                                 noise_schedule_sampler_args = {}
 
                                 if karras_noise:
-                                    end_karras_ramp_early = False # this is only needed for really low step counts, not going to bother with it right now
+                                    # this is only needed for really low step counts, not going to bother with it right now
+                                    end_karras_ramp_early = False
+
                                     def get_premature_sigma_min(
                                         steps: int,
                                         sigma_max: float,
                                         sigma_min_nominal: float,
                                         rho: float
                                     ) -> float:
-                                        min_inv_rho = sigma_min_nominal ** (1 / rho)
+                                        min_inv_rho = sigma_min_nominal ** (
+                                            1 / rho)
                                         max_inv_rho = sigma_max ** (1 / rho)
                                         ramp = (steps-2) * 1/(steps-1)
-                                        sigma_min = (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
+                                        sigma_min = (
+                                            max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
                                         return sigma_min
 
                                     rho = 7.
-                                    sigma_max=model_k_wrapped.sigmas[-1].item()
-                                    sigma_min_nominal=model_k_wrapped.sigmas[0].item()
+                                    sigma_max = model_k_wrapped.sigmas[-1].item()
+                                    sigma_min_nominal = model_k_wrapped.sigmas[0].item(
+                                    )
                                     premature_sigma_min = get_premature_sigma_min(
                                         steps=opt.ddim_steps+1,
                                         sigma_max=sigma_max,
@@ -405,41 +490,84 @@ def do_run(device, model, opt):
                                         device=device,
                                     )
 
+                                else:
+                                    sigmas = model_k_wrapped.get_sigmas(
+                                        opt.ddim_steps)
 
-                    add_metadata = True
-                    metadata = PngInfo()
-                    if add_metadata == True:
-                        metadata.add_text("prompt", str(prompts))
-                        metadata.add_text("seed", str(opt.seed))
-                        metadata.add_text("steps", str(opt.ddim_steps))
+                                if init_latent is not None:
+                                    sigmas = sigmas[len(sigmas) - t_enc - 1:]
+
+                                x = start_code * sigmas[0]  # for GPU draw
+                                if init_latent is not None:
+                                    x = init_latent + x
+
+                                extra_args = {
+                                    'conditions': (c,),
+                                    'uncond': uc,
+                                    'cond_scale': scale,
+                                }
+                                samples_ddim = sampling_fn(
+                                    model_k_guidance,
+                                    x,
+                                    sigmas,
+                                    extra_args=extra_args,
+                                    **noise_schedule_sampler_args)
+
+                            x_samples_ddim = model.decode_first_stage(
+                                samples_ddim)
+                            x_samples_ddim = torch.clamp(
+                                (x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
 
                             for x_sample in x_samples_ddim:
-                                x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                output_filename = os.path.join(outpath, f'{opt.batch_name}{opt.device_id}-{grid_count:04}{opt.filetype}')
-                                output_image = Image.fromarray(x_sample.astype(np.uint8))
-                                output_image.save(progress_image, pnginfo=metadata, quality = opt.quality)
-                                if opt.improve_composition == False: # this is our actual output, so save it accordingly
-                                    shutil.copy2(progress_image, output_filename)
-                                    print(f'\nOutput saved as "{output_filename}"\n')
+                                x_sample = 255. * \
+                                    rearrange(x_sample.cpu().numpy(),
+                                              'c h w -> h w c')
+                                output_filename = os.path.join(
+                                    outpath, f'{opt.batch_name}{opt.device_id}-{grid_count:04}{opt.filetype}')
+                                output_image = Image.fromarray(
+                                    x_sample.astype(np.uint8))
+
+                                # output_image.save(
+                                #     progress_image, pnginfo=metadata, quality=opt.quality)
+
+                                # save gif
+                                images = []
+                                for filename in os.listdir(gif_dir):
+                                    images.append(imageio.imread(
+                                        f'{gif_dir}/{filename}'))
+                                images.extend(reversed(images))
+                                imageio.mimsave(f'{gif_dir}.gif', images)
+
+                                shutil.copy2(f'{gif_dir}.gif', "fade.gif")
+
+                                if opt.improve_composition == False:  # this is our actual output, so save it accordingly
+                                    shutil.copy2(progress_image,
+                                                 output_filename)
+                                    print(
+                                        f'\nOutput saved as "{output_filename}"\n')
                                     render_left_to_do = False
                                     grid_count += 1
-                                else: #otherwise, we use this output as an init for another run
+                                else:  # otherwise, we use this output as an init for another run
                                     compositional_init = progress_image
                                     opt.improve_composition = False
                                     opt.prompt = prompts[0]
-                                    data = [batch_size * [opt.prompt]] # make sure we use the enhanced prompt instead of the original
-                                    print('\nImprove Composition enabled! Re-rendering at the desired size.')
+                                    # make sure we use the enhanced prompt instead of the original
+                                    data = [batch_size * [opt.prompt]]
+                                    print(
+                                        '\nImprove Composition enabled! Re-rendering at the desired size.')
                                 output_image.close()
                     toc = time.time()
     return output_filename
 
-#functions for GO BIG
+# functions for GO BIG
+
+
 def addalpha(im, mask):
     imr, img, imb, ima = im.split()
     mmr, mmg, mmb, mma = mask.split()
     # we want the RGB from the original, but the transparency from the mask
     im = Image.merge('RGBA', [imr, img, imb, mma])
-    return(im)
+    return (im)
 
 # Alternative method composites a grid of images at the positions provided
 
@@ -450,9 +578,10 @@ def grid_merge(source, slices):
         source.alpha_composite(slice, (posx, posy))
     return source
 
+
 def grid_coords(target, original, overlap, maxed):
-    #generate a list of coordinate tuples for our sections, in order of how they'll be rendered
-    #target should be the size for the gobig result, original is the size of each chunk being rendered
+    # generate a list of coordinate tuples for our sections, in order of how they'll be rendered
+    # target should be the size for the gobig result, original is the size of each chunk being rendered
     target_x, target_y = target
     original_x, original_y = original
     do_calc = True
@@ -463,19 +592,19 @@ def grid_coords(target, original, overlap, maxed):
         center_y = int(target_y / 2)
         x = center_x - int(original_x / 2)
         y = center_y - int(original_y / 2)
-        center.append((x,y)) #center chunk
-        uy = y #up
+        center.append((x, y))  # center chunk
+        uy = y  # up
         uy_list = []
-        dy = y #down
+        dy = y  # down
         dy_list = []
-        lx = x #left
+        lx = x  # left
         lx_list = []
-        rx = x #right
+        rx = x  # right
         rx_list = []
-        while uy > 0: #center row vertical up
+        while uy > 0:  # center row vertical up
             uy = uy - original_y + overlap
             uy_list.append((lx, uy))
-        while (dy + original_y) <= target_y: #center row vertical down
+        while (dy + original_y) <= target_y:  # center row vertical down
             dy = dy + original_y - overlap
             dy_list.append((rx, dy))
         while lx > 0:
@@ -503,9 +632,11 @@ def grid_coords(target, original, overlap, maxed):
         if maxed:
             # calculate a new size that will fill the canvas, which will be optionally used in grid_slice and go_big
             last_coordx, last_coordy = dy_list[-1:][0]
-            render_edgey = last_coordy + original_y # outer bottom edge of the render canvas
-            render_edgex = last_coordx + original_x # outer side edge of the render canvas
-            render_edgex += (render_edgex - target_x) # we have to extend the "negative" side as well, so we do it twice
+            # outer bottom edge of the render canvas
+            render_edgey = last_coordy + original_y
+            render_edgex = last_coordx + original_x  # outer side edge of the render canvas
+            # we have to extend the "negative" side as well, so we do it twice
+            render_edgex += (render_edgex - target_x)
             render_edgey += (render_edgey - target_y)
             scalarx = render_edgex / target_x
             scalary = render_edgey / target_y
@@ -532,8 +663,10 @@ def grid_coords(target, original, overlap, maxed):
     return result, (target_x, target_y)
 
 # Chop our source into a grid of images that each equal the size of the original render
-def grid_slice(source, overlap, og_size, maxed=False): 
-    width, height = og_size # size of the slices to be rendered
+
+
+def grid_slice(source, overlap, og_size, maxed=False):
+    width, height = og_size  # size of the slices to be rendered
     coordinates, new_size = grid_coords(source.size, og_size, overlap, maxed)
     if source.size != new_size:
         source = source.resize(new_size, get_resampling_mode())
@@ -688,7 +821,7 @@ def randomizer(category):
         for line in f:
             randomizers.append(line.strip())
     random_item = random.choice(randomizers)
-    return(random_item)
+    return (random_item)
 
 # replace anything surrounded by underscores with a random entry from the matching text file
 
@@ -779,7 +912,7 @@ class Settings:
     method = "k_lms"
     save_settings = False
     improve_composition = False
-    
+
     def apply_settings_file(self, filename, settings_file):
         print(f'Applying settings file: {filename}')
         if is_json_key_present(settings_file, 'prompt'):
@@ -821,7 +954,8 @@ class Settings:
         if is_json_key_present(settings_file, 'resize_method'):
             self.resize_method = (settings_file["resize_method"])
         if is_json_key_present(settings_file, 'gobig_realesrgan'):
-            print('\nThe "gobig_realesrgan" setting is deprecated, use "resize_method" instead.\n')
+            print(
+                '\nThe "gobig_realesrgan" setting is deprecated, use "resize_method" instead.\n')
         if is_json_key_present(settings_file, 'gobig'):
             self.gobig = (settings_file["gobig"])
         if is_json_key_present(settings_file, 'gobig_init'):
@@ -857,12 +991,49 @@ class Settings:
         if is_json_key_present(settings_file, 'improve_composition'):
             self.improve_composition = (settings_file["improve_composition"])
 
+
+def save_settings(options, prompt, filenum):
+    setting_list = {
+        'prompt': prompt,
+        'batch_name': options.batch_name,
+        'steps': options.ddim_steps,
+        'eta': options.ddim_eta,
+        'n_iter': options.n_iter,
+        'width': options.W,
+        'height': options.H,
+        'scale': options.scale,
+        'dyn': options.dyn,
+        'seed': options.seed,
+        'variance': options.variance,
+        'init_image': options.init_image,
+        'init_strength': 1.0 - options.strength,
+        'resize_method': options.resize_method,
+        'gobig': options.gobig,
+        'gobig_init': options.gobig_init,
+        'gobig_scale': options.gobig_scale,
+        'gobig_prescaled': options.gobig_prescaled,
+        'gobig_maximize': options.gobig_maximize,
+        'gobig_overlap': options.gobig_overlap,
+        'gobig_keep_slices': options.gobig_keep_slices,
+        'esrgan_model': options.esrgan_model,
+        'gobig_cgs': options.gobig_cgs,
+        'augment_prompt': options.augment_prompt,
+        'use_jpg': "true" if options.filetype == ".jpg" else "false",
+        'hide_metadata': options.hide_metadata,
+        'method': options.method,
+        'improve_composition': options.improve_composition
+    }
+    with open(f"{options.outdir}/{options.batch_name}-{filenum:04}.json",  "w+", encoding="utf-8") as f:
+        json.dump(setting_list, f, ensure_ascii=False, indent=4)
+
+
 def esrgan_resize(input, id, esrgan_model='realesrgan-x4plus'):
     input.save(f'_esrgan_orig{id}.png')
     input.close()
     try:
         subprocess.run(
-            ['realesrgan-ncnn-vulkan', '-n', esrgan_model, '-i', '_esrgan_orig.png', '-o', '_esrgan_.png'],
+            ['realesrgan-ncnn-vulkan', '-n', esrgan_model,
+                '-i', '_esrgan_orig.png', '-o', '_esrgan_.png'],
             stdout=subprocess.PIPE
         ).stdout.decode('utf-8')
         output = Image.open('_esrgan_.png').convert('RGB')
@@ -871,6 +1042,7 @@ def esrgan_resize(input, id, esrgan_model='realesrgan-x4plus'):
         print('ESRGAN resize failed. Make sure realesrgan-ncnn-vulkan is in your path (or in this directory)')
         print(e)
         quit()
+
 
 def do_gobig(gobig_init, device, model, opt):
     overlap = opt.gobig_overlap
@@ -883,13 +1055,17 @@ def do_gobig(gobig_init, device, model, opt):
         target_W = opt.W * opt.gobig_scale
         target_H = opt.H * opt.gobig_scale
         if opt.resize_method == "realesrgan":
-            input_image = esrgan_resize(input_image, opt.device_id, opt.esrgan_model)
-        target_image = input_image.resize((target_W, target_H), get_resampling_mode()) #esrgan resizes 4x by default, so this brings us in line with our actual scale target
+            input_image = esrgan_resize(
+                input_image, opt.device_id, opt.esrgan_model)
+        # esrgan resizes 4x by default, so this brings us in line with our actual scale target
+        target_image = input_image.resize(
+            (target_W, target_H), get_resampling_mode())
     else:
         #target_W, target_H = input_image.size
         target_image = input_image
     # slice up the image into a grid
-    slices, target_image = grid_slice(target_image, overlap, (opt.W, opt.H), opt.gobig_maximize)
+    slices, target_image = grid_slice(
+        target_image, overlap, (opt.W, opt.H), opt.gobig_maximize)
     # now we trigger a do_run for each slice
     betterslices = []
     slice_image = f'slice{opt.device_id}.png'
@@ -898,9 +1074,11 @@ def do_gobig(gobig_init, device, model, opt):
         chunk.save(slice_image)
         chunk.close()
         opt.init_image = slice_image
-        opt.save_settings = False # we don't need to keep settings for each slice, just the main image.
-        opt.n_iter = 1 # no point doing multiple iterations since only one will be used
-        opt.improve_composition = False # don't want to do stretching and yet another init image during gobig
+        # we don't need to keep settings for each slice, just the main image.
+        opt.save_settings = False
+        opt.n_iter = 1  # no point doing multiple iterations since only one will be used
+        # don't want to do stretching and yet another init image during gobig
+        opt.improve_composition = False
         opt.seed = opt.seed + 1
         opt.scale = opt.gobig_cgs if opt.gobig_cgs != None else opt.scale
         if opt.augment_prompt != None:
@@ -917,15 +1095,17 @@ def do_gobig(gobig_init, device, model, opt):
     alpha_gradient = ImageDraw.Draw(alpha)
     a = 0
     i = 0
-    a_overlap = int(overlap / 2) # we want the alpha gradient to be half the size of the overlap, otherwise we always see some of the original background underneath
-    shape = ((opt.W, opt.H), (0,0))
+    # we want the alpha gradient to be half the size of the overlap, otherwise we always see some of the original background underneath
+    a_overlap = int(overlap / 2)
+    shape = ((opt.W, opt.H), (0, 0))
     while i < overlap:
-        alpha_gradient.rectangle(shape, fill = a)
+        alpha_gradient.rectangle(shape, fill=a)
         a += int(255 / a_overlap)
         a = 255 if a > 255 else a
         i += 1
-        shape = ((opt.W - i, opt.H - i), (i,i))
-    alpha_gradient.rectangle(shape, fill = 255) # one last one to make sure the non-overlap section is fully used.
+        shape = ((opt.W - i, opt.H - i), (i, i))
+    # one last one to make sure the non-overlap section is fully used.
+    alpha_gradient.rectangle(shape, fill=255)
     mask = Image.new('RGBA', (opt.W, opt.H), color=0)
     mask.putalpha(alpha)
     # now composite the slices together
@@ -936,14 +1116,15 @@ def do_gobig(gobig_init, device, model, opt):
     final_output = grid_merge(target_image, finished_slices)
     # name the file in a way that hopefully doesn't break things
     print(f'result is {result}')
-    result = result.replace('.png','')
+    result = result.replace('.png', '')
     result_split = result.rsplit('-', 1)
     result_split[0] = result_split[0] + '_gobig-'
     result = result_split[0] + result_split[1]
     print(f'Gobig output saved as {result}{opt.filetype}')
-    final_output.save(f'{result}{opt.filetype}', quality = opt.quality)
+    final_output.save(f'{result}{opt.filetype}', quality=opt.quality)
     final_output.close()
     input_image.close()
+
 
 def main():
     print('\nPROG ROCK STABLE')
@@ -994,11 +1175,13 @@ def main():
     if cl_args.gobig_prescaled:
         settings.gobig_prescaled = cl_args.gobig_prescaled
 
-    valid_methods = ['k_lms', 'k_dpm_2_ancestral', 'k_dpm_2', 'k_heun', 'k_euler_ancestral', 'k_euler', 'ddim']
+    valid_methods = ['k_lms', 'k_dpm_2_ancestral', 'k_dpm_2',
+                     'k_heun', 'k_euler_ancestral', 'k_euler', 'ddim']
     if any(settings.method in s for s in valid_methods):
         print(f'Using {settings.method} sampling method.')
     else:
-        print(f'Method {settings.method} is not available. The valid choices are:')
+        print(
+            f'Method {settings.method} is not available. The valid choices are:')
         print(valid_methods)
         print()
         print(f'Falling back k_lms')
@@ -1015,18 +1198,22 @@ def main():
     device_id = ""  # leave this blank unless it's a cuda device
     if torch.cuda.is_available() and "cuda" in cl_args.device:
         device = torch.device(f'{cl_args.device}')
-        device_id = ("_" + cl_args.device.rsplit(':',1)[1]) if "0" not in cl_args.device else ""
+        device_id = ("_" + cl_args.device.rsplit(':', 1)
+                     [1]) if "0" not in cl_args.device else ""
     elif ("mps" in cl_args.device) or (torch.backends.mps.is_available()):
         device = torch.device("mps")
-        settings.method = "ddim" # k_diffusion currently not working on anything other than cuda
+        # k_diffusion currently not working on anything other than cuda
+        settings.method = "ddim"
     else:
         # fallback to CPU if we don't recognize the device name given
         device = torch.device("cpu")
         cores = os.cpu_count()
         torch.set_num_threads(cores)
-        settings.method = "ddim" # k_diffusion currently not working on anything other than cuda
+        # k_diffusion currently not working on anything other than cuda
+        settings.method = "ddim"
 
-    starting_settings = settings # save our initial setup so we can get back to it if needed
+    # save our initial setup so we can get back to it if needed
+    starting_settings = settings
 
     print('Pytorch is using device:', device)
 
@@ -1037,14 +1224,14 @@ def main():
     # load the model to the device
     if "cuda" in str(device):
         torch.set_default_tensor_type(torch.HalfTensor)
-        model = model.half() # half-precision mode for gpus, saves vram, good good
+        model = model.half()  # half-precision mode for gpus, saves vram, good good
     model = model.to(device)
 
     there_is_work_to_do = True
     while there_is_work_to_do:
         if cl_args.interactive:
             # Interactive mode waits for a job json, runs it, then goes back to waiting
-            job_json = ("job_" + cl_args.device + ".json").replace(":","_")
+            job_json = ("job_" + cl_args.device + ".json").replace(":", "_")
             print(f'\nInteractive Mode On! Waiting for {job_json}')
             job_ready = False
             while job_ready == False:
@@ -1054,12 +1241,14 @@ def main():
                     try:
                         with open(job_json, 'r', encoding="utf-8") as json_file:
                             settings_file = json.load(json_file)
-                            settings.apply_settings_file(job_json, settings_file)
+                            settings.apply_settings_file(
+                                job_json, settings_file)
                             prompts = []
                             prompts.append(settings.prompt)
                         job_ready = True
                     except Exception as e:
-                        print('Failed to open or parse ' + job_json + ' - Check formatting.')
+                        print('Failed to open or parse ' +
+                              job_json + ' - Check formatting.')
                         print(e)
                         os.remove(job_json)
                 else:
@@ -1078,24 +1267,23 @@ def main():
         else:
             prompts.append(settings.prompt)
 
-
         for p in range(len(prompts)):
             for i in range(settings.n_batches):
                 # pack up our settings into a simple namespace for the renderer
                 opt = {
-                    "prompt" : prompts[p],
-                    "batch_name" : settings.batch_name,
-                    "outdir" : outdir,
-                    "ddim_steps" : settings.steps,
-                    "ddim_eta" : settings.eta,
-                    "n_iter" : settings.n_iter,
-                    "W" : settings.width,
-                    "H" : settings.height,
-                    "C" : 4,
-                    "f" : 8,
-                    "scale" : settings.scale,
-                    "dyn" : settings.dyn,
-                    "seed" : settings.seed + i,
+                    "prompt": prompts[p],
+                    "batch_name": settings.batch_name,
+                    "outdir": outdir,
+                    "ddim_steps": settings.steps,
+                    "ddim_eta": settings.eta,
+                    "n_iter": settings.n_iter,
+                    "W": settings.width,
+                    "H": settings.height,
+                    "C": 4,
+                    "f": 8,
+                    "scale": settings.scale,
+                    "dyn": settings.dyn,
+                    "seed": settings.seed + i,
                     "variance": settings.variance,
                     "variance_seed": settings.seed + i + 1,
                     "precision": "autocast",
@@ -1132,16 +1320,18 @@ def main():
                 if settings.gobig:
                     do_gobig(gobig_init, device, model, opt)
                 if settings.cool_down > 0 and ((i < (settings.n_batches - 1)) or p < (len(prompts) - 1)):
-                    print(f'Pausing {settings.cool_down} seconds to give your poor GPU a rest...')
+                    print(
+                        f'Pausing {settings.cool_down} seconds to give your poor GPU a rest...')
                     time.sleep(settings.cool_down)
             if not settings.frozen_seed:
                 settings.seed = settings.seed + 1
         if cl_args.interactive == False:
-            #only doing one render, so we stop after this
+            # only doing one render, so we stop after this
             there_is_work_to_do = False
         else:
             print('\nJob finished! And so we wait...\n')
             os.remove(job_json)
+
 
 if __name__ == "__main__":
     main()
