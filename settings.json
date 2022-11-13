@@ -5,8 +5,13 @@
     "prompt" : "A druid in his shop, selling potions and trinkets, fantasy painting by raphael lacoste and craig mullins",
     "batch_name" : "Default", // Directory to save to inside "out"
     "width" : 512, // resolution (not used when doing init_image)
+
     "height" : 512, // resolution (not used when doing init_image)
     "steps" : 50, // Number of steps to do
+
+    // "height" : 640, // resolution (not used when doing init_image)
+    // "steps" : 150, // Number of steps to do
+
     "scale" : 7.0, // Affects how strongly the prompt is applied, a value from 6.0 to 9.0 is sensible.
     "seed" : "random", // Can be set to a specific number (no quotes)
     "n_batches" : 1, // Number of overall batches of images to make in this render

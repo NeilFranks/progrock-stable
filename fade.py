@@ -84,6 +84,16 @@ def thats_numberwang(dir, wildcard):
             end = file.index('.', start+1)
             filenum = int(file[(start + 1):end])
             filenums.append(filenum)
+
+        else:
+            try:
+                filenums.append(int(file))
+            except:
+                try:
+                    filenums.append(int(file[:-4]))
+                except:
+                    pass
+
     if not filenums:
         numberwang = 0
     else:
@@ -113,11 +123,17 @@ def do_run(device, model, opt):
     sample_path = os.path.join(outpath, "samples")
     os.makedirs(sample_path, exist_ok=True)
     base_count = thats_numberwang(sample_path, opt.batch_name)
+
+    # grid_count = thats_numberwang(outpath, opt.batch_name)
+
     grid_count = thats_numberwang(outpath, opt.batch_name)
 
     if opt.init_image is not None:
         assert os.path.isfile(opt.init_image)
-        init_image = load_img(opt.init_image).to(device)
+        # init_image = load_img(opt.init_image).to(device)
+
+        init_image = load_img(opt.init_image).to(device).half()
+
         init_image = repeat(init_image, '1 ... -> b ...', b=batch_size)
         init_latent = model.get_first_stage_encoding(
             model.encode_first_stage(init_image))  # move to latent space
@@ -214,7 +230,9 @@ def do_run(device, model, opt):
                     grid = 255. * \
                         rearrange(grid, 'c h w -> h w c').cpu().numpy()
                     output_filename = os.path.join(
-                        outpath, f'{opt.batch_name}{opt.device_id}-{grid_count:04}{opt.filetype}')
+                        # outpath, f'{opt.batch_name}{opt.device_id}-{grid_count:04}{opt.filetype}')
+
+                        outpath, f'{grid_count:04}{opt.filetype}')
                     Image.fromarray(grid.astype(np.uint8)).save(
                         output_filename, pnginfo=metadata, quality=opt.quality)
                     grid_count += 1
@@ -230,7 +248,7 @@ def addalpha(im, mask):
     mmr, mmg, mmb, mma = mask.split()
     # we want the RGB from the original, but the transparency from the mask
     im = Image.merge('RGBA', [imr, img, imb, mma])
-    return(im)
+    return (im)
 
 # Alternative method composites a grid of images at the positions provided
 
@@ -439,7 +457,7 @@ def randomizer(category):
         for line in f:
             randomizers.append(line.strip())
     random_item = random.choice(randomizers)
-    return(random_item)
+    return (random_item)
 
 # replace anything surrounded by underscores with a random entry from the matching text file
 
@@ -669,7 +687,13 @@ def main():
     if cl_args.from_file:
         settings.from_file = cl_args.from_file
 
-    outdir = (f'./out/{settings.batch_name}')
+    # outdir = (f'./out/{settings.batch_name}')
+
+    settings.batch_name = "fade"
+    highest_number = thats_numberwang(
+        f'./out/{settings.batch_name}', settings.batch_name)
+    outdir = (f'./out/{settings.batch_name}/{highest_number:04}')
+
     filetype = ".jpg" if settings.use_jpg else ".png"
     quality = 97 if settings.use_jpg else 100
 
@@ -715,52 +739,68 @@ def main():
     # for prompt in prompts:
     while True:
         prompt = input("enter prompt:")
-        for i in range(settings.n_batches):
-            # pack up our settings into a simple namespace for the renderer
-            opt = {
-                "prompt": prompt,
-                "batch_name": settings.batch_name,
-                "outdir": outdir,
-                "skip_grid": False,
-                "skip_save": False,
-                "ddim_steps": settings.steps,
-                "plms": settings.plms,
-                "ddim_eta": settings.eta,
-                "n_iter": settings.n_iter,
-                "W": settings.width,
-                "H": settings.height,
-                "C": 4,
-                "f": 8,
-                "n_samples": settings.n_samples,
-                "n_rows": settings.n_rows,
-                "scale": settings.scale,
-                "dyn": settings.dyn,
-                "from_file": settings.from_file,
-                "seed": settings.seed + i,
-                "seed": random.randrange(0, 10000),
-                # "seed": 84,
-                "fixed_code": False,
-                "precision": "autocast",
-                "init_image": settings.init_image,
-                "strength": 1.0 - settings.init_strength,
-                "gobig_maximize": settings.gobig_maximize,
-                "gobig_overlap": settings.gobig_overlap,
-                "gobig_realesrgan": settings.gobig_realesrgan,
-                "config": config,
-                "filetype": filetype,
-                "quality": quality,
-                "device_id": device_id
-            }
-            opt = SimpleNamespace(**opt)
+        steps = settings.steps
+        # for i in range(settings.n_batches):
+        # pack up our settings into a simple namespace for the renderer
+        opt_dict = {
+            "prompt": prompt,
+            "batch_name": settings.batch_name,
+            "outdir": outdir,
+            "skip_grid": False,
+            "skip_save": False,
+            # "ddim_steps": settings.steps,
+
+            "ddim_steps": 5,
+
+            "plms": settings.plms,
+            "ddim_eta": settings.eta,
+            "n_iter": settings.n_iter,
+            "W": settings.width,
+            "H": settings.height,
+            "C": 4,
+            "f": 8,
+            "n_samples": settings.n_samples,
+            "n_rows": settings.n_rows,
+            "scale": settings.scale,
+            "dyn": settings.dyn,
+            "from_file": settings.from_file,
+            # "seed": settings.seed,
+            "seed": random.randrange(0, 10000),
+            # "seed": 84,
+            "fixed_code": False,
+            "precision": "autocast",
+            "init_image": settings.init_image,
+            "strength": 1.0 - settings.init_strength,
+            "gobig_maximize": settings.gobig_maximize,
+            "gobig_overlap": settings.gobig_overlap,
+            "gobig_realesrgan": settings.gobig_realesrgan,
+            "config": config,
+            "filetype": filetype,
+            "quality": quality,
+            "device_id": device_id
+        }
+
+        for i in range(steps):
+
+            opt = SimpleNamespace(**opt_dict)
+
             # render the image(s)!
             if cl_args.gobig_init == None:
                 # either just a regular render, or a regular render that will next go_big
-                gobig_init = do_run(device, model, opt)
+                # gobig_init = do_run(device, model, opt)
+
+                output_file_name = do_run(device, model, opt)
             else:
                 gobig_init = cl_args.gobig_init
             if cl_args.gobig:
-                do_gobig(gobig_init, cl_args.gobig_scale, device, model, opt)
-            if settings.cool_down > 0 and i < (settings.n_batches - 1):
+                # do_gobig(gobig_init, cl_args.gobig_scale, device, model, opt)
+
+                do_gobig(output_file_name, cl_args.gobig_scale,
+                         device, model, opt)
+
+            opt_dict["init_image"] = output_file_name
+
+            if settings.cool_down > 0 and i < (steps - 1):
                 print(
                     f'Pausing {settings.cool_down} seconds to give your poor GPU a rest...')
                 time.sleep(settings.cool_down)
